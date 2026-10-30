@@ -1,0 +1,81 @@
+# Every push: unit tests, then every LoopLens trace is compared with real Java
+# on OpenJDK 21, then the site is built. Pushes to main deploy to GitHub Pages,
+# but only if every trace matched.
+
+name: Check traces and deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# one deployment at a time; a deploy that has started is allowed to finish
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Tests, OpenJDK trace check, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Unit tests (simulator, misconception rules, session)
+        run: npm test
+
+      - name: Compare every trace with real Java (OpenJDK 21)
+        run: npm run verify:java
+
+      - name: Build the site
+        run: npm run build
+        env:
+          # optional: the Google Apps Script web app URL for anonymous logging (Settings, Variables, Actions)
+          VITE_LOG_URL: ${{ vars.LOG_URL }}
+
+      - name: Keep the generated Java programs
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: java-check
+          path: java-check
+          if-no-files-found: ignore
+
+      - name: Upload the site for Pages
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: dist
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: check
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v5
